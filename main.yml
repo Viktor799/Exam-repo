@@ -1,0 +1,161 @@
+---
+- hosts: all
+  become: true
+
+  tasks:
+    - name: install packages
+      apt:
+         pkg:
+              - php8.1-cli
+              - php-xml
+              - php-mysql
+              - libapache2-mod-php
+              - apache2
+              - git
+              - zip
+              - unzip
+              - curl
+              - php-curl
+      become: yes
+
+    - name: Installing Mysql  and dependencies
+      package:
+       name: "{{item}}"
+       state: present
+       update_cache: yes
+      loop:
+       - mysql-server
+       - mysql-client 
+       - python3-mysqldb
+       - libmysqlclient-dev
+      become: yes
+
+    - name: start and enable mysql service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+    
+    - name: creating mysql user (victor)
+      mysql_user:
+        name: "{{db_user}}"
+        password: "{{db_pass}}"
+        priv: '*.*:ALL'
+        host: '%'
+        state: present
+    
+    - name: creating vick_db
+      mysql_db:
+        name: "{{db_name}}"
+        state: present
+    
+    - name: Enable remote login to mysql
+      lineinfile:
+         path: /etc/mysql/mysql.conf.d/mysqld.cnf
+         regexp: '^bind-address'
+         line: 'bind-address = 0.0.0.0'
+         backup: yes
+      notify:
+         - Restart mysql
+
+  handlers:
+    - name: Restart mysql
+      service:
+        name: mysql
+        state: restarted
+
+  tasks:
+    - name: download composer installer
+      get_url:
+             url: https://getcomposer.org/installer
+             dest: /tmp/composer
+
+    - name: install composer
+      shell: php /tmp/composer --install-dir=/usr/local/bin
+      become: yes
+
+    - name: rename composer executable
+      shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
+      become: yes
+
+    - name: set permissions for composer file
+      file:
+        path: /usr/local/bin/composer
+        mode: a+x
+        state: file
+      become: yes
+
+    - name: clone laravel codebase
+      git:
+          repo: https://github.com/f1amy/laravel-realworld-example-app.git
+          dest: /var/www/myapp
+      become: yes
+
+    - name: take ownership of myapp folder
+      file:
+         path: /var/www/myapp
+         owner: "{{ ansible_effective_user_id }}"
+         group: "{{ ansible_effective_group_id }}"
+      become: yes
+
+    - name: set permissions for Laravel storage folder
+      file:
+          path: /var/www/myapp/storage
+          state: directory
+          recurse: yes
+          mode: '0755'
+      become: yes
+
+    - name: install laravel dependencies
+      composer:
+          command: update
+          working_dir: /var/www/myapp
+      environment:
+        COMPOSER_ALLOW_SUPERUSER: "1"
+#      become: yes
+
+    - name: copy env file
+      copy:
+       src: /var/www/myapp/.env.example
+       remote_src: yes
+       dest: /var/www/myapp/.env
+       owner: "{{ ansible_effective_user_id }}"
+       group: "{{ ansible_effective_group_id }}"
+       mode: '0644'
+      become: yes
+
+    - name: copy apache config
+      copy:
+          src: stubs/myapp.conf
+          dest: /etc/apache2/sites-available/myapp.conf
+          owner: "{{ ansible_effective_user_id }}"
+          group: "{{ ansible_effective_group_id }}"
+          mode: '0644'
+      become: yes
+
+    - name: set server name
+      replace:
+          path: /etc/apache2/sites-available/myapp.conf
+          regexp: '$SERVER_NAME'
+          replace: '{{ ansible_host }}'
+      become: yes
+
+    - name: enable the new config
+      shell: |
+          a2ensite myapp.conf
+          a2dissite 000-default.conf
+          a2enmod rewrite
+          service apache2 restart
+      become: yes
+
+    - name: setup laravel
+      shell: |
+          cd /var/www/myapp
+          php artisan key:generate
+      become: yes
+
+
+
+
+
+
